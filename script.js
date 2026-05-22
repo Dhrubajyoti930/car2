@@ -24,11 +24,29 @@ let useGyro = false, gyroSteer = 0, isFirstPerson = false, isNitro = false, isCu
 const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
 let steeringInput = 0, throttleInput = 0, carAngle = 0, speed = 0, camTilt = 0;
 const velocity = new THREE.Vector2(0, 0);
-const history = [], GHOST_DELAY = 120, particles = [], trails = [], chunks = new Map(), chunkSize = 600;
+
+// --- FIX 4: Circular buffer for ghost history ---
+const GHOST_DELAY = 120;
+const HISTORY_SIZE = 1000;
+const history = new Array(HISTORY_SIZE);
+let histHead = 0, histCount = 0;
+
+function historyPush(entry) {
+    history[histHead] = entry;
+    histHead = (histHead + 1) % HISTORY_SIZE;
+    if (histCount < HISTORY_SIZE) histCount++;
+}
+function historyGet(offsetFromEnd) {
+    // offsetFromEnd=0 is newest, offsetFromEnd=histCount-1 is oldest
+    const idx = (histHead - 1 - offsetFromEnd + HISTORY_SIZE * 2) % HISTORY_SIZE;
+    return history[idx];
+}
+
+const particles = [], trails = [], chunks = new Map(), chunkSize = 600;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x00CCFF);
-scene.fog = new THREE.Fog(0x00CCFF, 100, 1200); 
+scene.fog = new THREE.Fog(0x00CCFF, 100, 1200);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 4000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -41,11 +59,15 @@ const dustGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
 const skidGeo = new THREE.PlaneGeometry(0.6, 1.2);
 const skidMatBase = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
 
+// --- FIX 3: Reusable dust materials ---
+const dustMatNormal = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+const dustMatNitro = new THREE.MeshBasicMaterial({ color: 0x00FFFF });
+
 const sunGroup = new THREE.Group();
 const sunDisk = new THREE.Mesh(new THREE.CircleGeometry(150, 32), new THREE.MeshBasicMaterial({ color: 0xFFEE00, fog: false }));
 sunGroup.add(sunDisk);
-for(let i=0; i<8; i++){
-    const s = new THREE.Mesh(new THREE.BoxGeometry(320, 15 - (i * 1.5), 1), new THREE.MeshBasicMaterial({color: 0x00CCFF, fog: false}));
+for (let i = 0; i < 8; i++) {
+    const s = new THREE.Mesh(new THREE.BoxGeometry(320, 15 - (i * 1.5), 1), new THREE.MeshBasicMaterial({ color: 0x00CCFF, fog: false }));
     s.position.y = -40 - (i * 25); s.position.z = 1; sunGroup.add(s);
 }
 scene.add(sunGroup);
@@ -73,7 +95,7 @@ const ghostModel = createCar(true); ghostGroup.add(ghostModel); scene.add(ghostG
 function createSkidMark() {
     const offsets = [-0.8, 0.8];
     offsets.forEach(offX => {
-        const skid = new THREE.Mesh(skidGeo, skidMatBase);
+        const skid = new THREE.Mesh(skidGeo, skidMatBase.clone());
         const pos = new THREE.Vector3(offX, 0.01, -1.2).applyMatrix4(carGroup.matrixWorld);
         skid.position.copy(pos);
         skid.rotation.x = Math.PI / 2;
@@ -87,20 +109,21 @@ function createSkidMark() {
 function createChunk(cx, cz) {
     const group = new THREE.Group();
     group.add(new THREE.GridHelper(chunkSize, 15, 0, 0));
-    for(let i=0; i<15; i++) {
-        const h = Math.random()*150+50;
+    for (let i = 0; i < 15; i++) {
+        const h = Math.random() * 150 + 50;
         const b = new THREE.Mesh(buildingGeo, buildingMat);
         b.scale.set(35, h, 35);
-        b.position.set((Math.random()-0.5)*chunkSize, h/2, (Math.random()-0.5)*chunkSize);
-        if(Math.abs(b.position.x) < 70) b.position.x += 90;
+        b.position.set((Math.random() - 0.5) * chunkSize, h / 2, (Math.random() - 0.5) * chunkSize);
+        if (Math.abs(b.position.x) < 70) b.position.x += 90;
         group.add(b, new THREE.BoxHelper(b, 0));
     }
-    group.position.set(cx*chunkSize, 0, cz*chunkSize);
+    group.position.set(cx * chunkSize, 0, cz * chunkSize);
     scene.add(group); return group;
 }
 
+// --- FIX 3: Reuse dust materials, no per-call allocation ---
 function createDust(isNitroActive) {
-    const mat = new THREE.MeshBasicMaterial({ color: isNitroActive ? 0x00FFFF : 0xFFFFFF });
+    const mat = isNitroActive ? dustMatNitro : dustMatNormal;
     const p = new THREE.Mesh(dustGeo, mat);
     const side = (Math.random() > 0.5 ? 1.2 : -1.2);
     p.position.copy(new THREE.Vector3(side, 0.2, -1.5).applyMatrix4(carGroup.matrixWorld));
@@ -128,7 +151,7 @@ layoutBtn.onclick = (e) => {
     isCustomizing = !isCustomizing;
     document.body.classList.toggle('customizing', isCustomizing);
     layoutBtn.innerText = isCustomizing ? "SAVE" : "CUSTOMIZE";
-    
+
     if (!isCustomizing) {
         const layout = {};
         draggables.forEach(el => {
@@ -182,16 +205,28 @@ function activateGyroUI(active) {
     document.getElementById('steer-container').style.opacity = active ? "0.3" : "1";
 }
 
-const startAudio = () => { if(!audioStarted) initAudio(); };
-window.onkeydown = (e) => { startAudio(); keys[e.key.toLowerCase()] = true; if(e.key === " ") { keys.space = true; document.getElementById('btn-brake').classList.add('btn-active'); } if(e.key === "Shift") keys.shift = true; if(e.key === "c") togglePOV(); };
-window.onkeyup = (e) => { keys[e.key.toLowerCase()] = false; if(e.key === " ") { keys.space = false; document.getElementById('btn-brake').classList.remove('btn-active'); } if(e.key === "Shift") keys.shift = false; };
+const startAudio = () => { if (!audioStarted) initAudio(); };
+
+// --- FIX 6: addEventListener instead of window.onkeydown/onkeyup ---
+window.addEventListener('keydown', (e) => {
+    startAudio();
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === " ") { keys.space = true; document.getElementById('btn-brake').classList.add('btn-active'); }
+    if (e.key === "Shift") keys.shift = true;
+    if (e.key === "c") togglePOV();
+});
+window.addEventListener('keyup', (e) => {
+    keys[e.key.toLowerCase()] = false;
+    if (e.key === " ") { keys.space = false; document.getElementById('btn-brake').classList.remove('btn-active'); }
+    if (e.key === "Shift") keys.shift = false;
+});
 
 // POV Logic
 function togglePOV() {
     isFirstPerson = !isFirstPerson;
     document.getElementById('btn-pov').classList.toggle('btn-active', isFirstPerson);
 }
-document.getElementById('btn-pov').onclick = (e) => { if(isCustomizing) return; startAudio(); togglePOV(); };
+document.getElementById('btn-pov').onclick = (e) => { if (isCustomizing) return; startAudio(); togglePOV(); };
 
 // Brake Logic
 const brakeBtn = document.getElementById('btn-brake');
@@ -199,21 +234,29 @@ const setBrake = (active) => {
     keys.space = active;
     brakeBtn.classList.toggle('btn-active', active);
 };
-brakeBtn.onpointerdown = (e) => { if(isCustomizing) return; e.preventDefault(); startAudio(); setBrake(true); };
+brakeBtn.onpointerdown = (e) => { if (isCustomizing) return; e.preventDefault(); startAudio(); setBrake(true); };
 brakeBtn.onpointerup = () => setBrake(false);
 brakeBtn.onpointerleave = () => setBrake(false);
 
 // Nitro Logic
 const nitroBtn = document.getElementById('btn-nitro');
-nitroBtn.onpointerdown = (e) => { if(isCustomizing) return; e.preventDefault(); startAudio(); isNitro = true; keys.shift = true; };
+nitroBtn.onpointerdown = (e) => { if (isCustomizing) return; e.preventDefault(); startAudio(); isNitro = true; keys.shift = true; };
 nitroBtn.onpointerup = () => { isNitro = false; keys.shift = false; };
 nitroBtn.onpointerleave = () => { isNitro = false; keys.shift = false; };
 
-document.getElementById('btn-gyro').onclick = (e) => { if(isCustomizing) return; toggleGyro(); };
-document.getElementById('steer-slider').oninput = startAudio;
-document.getElementById('steer-slider').onpointerup = (e) => e.target.value = 0;
-document.getElementById('gas-slider').oninput = (e) => { startAudio(); throttleInput = parseFloat(e.target.value); };
-document.getElementById('gas-slider').onpointerup = (e) => { e.target.value = 0; throttleInput = 0; };
+document.getElementById('btn-gyro').onclick = (e) => { if (isCustomizing) return; toggleGyro(); };
+
+// --- FIX 5: pointercancel resets sliders ---
+const steerSlider = document.getElementById('steer-slider');
+const gasSlider = document.getElementById('gas-slider');
+
+steerSlider.oninput = startAudio;
+steerSlider.onpointerup = (e) => { e.target.value = 0; };
+steerSlider.onpointercancel = (e) => { e.target.value = 0; };
+
+gasSlider.oninput = (e) => { startAudio(); throttleInput = parseFloat(e.target.value); };
+gasSlider.onpointerup = (e) => { e.target.value = 0; throttleInput = 0; };
+gasSlider.onpointercancel = (e) => { e.target.value = 0; throttleInput = 0; };
 
 function animate(time) {
     requestAnimationFrame(animate);
@@ -222,8 +265,8 @@ function animate(time) {
     const nitroActive = (keys.shift || isNitro) && !keys.space;
     nitroBtn.classList.toggle('active', nitroActive);
 
-    let targetSteer = useGyro ? gyroSteer : -parseFloat(document.getElementById('steer-slider').value); 
-    if (keys.a) targetSteer = 1; if (keys.d) targetSteer = -1; 
+    let targetSteer = useGyro ? gyroSteer : -parseFloat(steerSlider.value);
+    if (keys.a) targetSteer = 1; if (keys.d) targetSteer = -1;
     steeringInput = THREE.MathUtils.lerp(steeringInput, targetSteer, 0.1);
 
     let accel = 0;
@@ -231,7 +274,7 @@ function animate(time) {
     if (keys.s || throttleInput < 0) accel = (keys.s ? -0.1 : throttleInput * 0.1);
     if (nitroActive) accel *= 1.8;
     speed += accel;
-    if (keys.space) speed *= 0.90; 
+    if (keys.space) speed *= 0.90;
     speed *= nitroActive ? 0.985 : 0.97;
 
     if (Math.abs(speed) > 0.1) carAngle += steeringInput * (0.035 + Math.min(Math.abs(speed), 1.5) * 0.005);
@@ -251,7 +294,7 @@ function animate(time) {
     carModel.userData.helpers.children.forEach(h => h.material.color.setHex(nitroActive ? 0x00FFFF : 0x000000));
 
     const shake = (Math.abs(speed) * (nitroActive ? 0.15 : 0.05)) + (Math.abs(angleDiff) * 0.4);
-    const shakeVec = new THREE.Vector3((Math.random()-0.5)*shake, (Math.random()-0.5)*shake, (Math.random()-0.5)*shake);
+    const shakeVec = new THREE.Vector3((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
     let camT, lookT;
     if (isFirstPerson) {
         camT = new THREE.Vector3(0, 1.2, 0.5).applyMatrix4(carGroup.matrixWorld).add(shakeVec);
@@ -270,42 +313,57 @@ function animate(time) {
         createSkidMark();
     }
 
-    if(audioStarted) {
-        engineOsc.frequency.setTargetAtTime(40 + (Math.abs(speed)*15) + (nitroActive ? 30 : 0), audioCtx.currentTime, 0.1);
-        engineGain.gain.setTargetAtTime(0.1 + (Math.abs(speed)*0.05), audioCtx.currentTime, 0.1);
-        driftGain.gain.setTargetAtTime(Math.min(Math.abs(angleDiff)*Math.abs(speed)*0.3, 0.2), audioCtx.currentTime, 0.05);
+    if (audioStarted) {
+        engineOsc.frequency.setTargetAtTime(40 + (Math.abs(speed) * 15) + (nitroActive ? 30 : 0), audioCtx.currentTime, 0.1);
+        engineGain.gain.setTargetAtTime(0.1 + (Math.abs(speed) * 0.05), audioCtx.currentTime, 0.1);
+        driftGain.gain.setTargetAtTime(Math.min(Math.abs(angleDiff) * Math.abs(speed) * 0.3, 0.2), audioCtx.currentTime, 0.05);
     }
 
-    history.push({ pos: carGroup.position.clone(), rotY: carGroup.rotation.y, rotZ: carModel.rotation.z, posY: carModel.position.y });
-    if (history.length > GHOST_DELAY) {
+    // --- FIX 4: Circular buffer push ---
+    historyPush({ pos: carGroup.position.clone(), rotY: carGroup.rotation.y, rotZ: carModel.rotation.z, posY: carModel.position.y });
+    if (histCount >= GHOST_DELAY) {
         ghostGroup.visible = !isFirstPerson;
-        const s = history[history.length - GHOST_DELAY];
+        const s = historyGet(GHOST_DELAY - 1);
         ghostGroup.position.copy(s.pos); ghostGroup.rotation.y = s.rotY;
         ghostModel.rotation.z = s.rotZ; ghostModel.position.y = s.posY;
-        if(history.length > 1000) history.shift();
     }
+
     sunGroup.position.set(carGroup.position.x, 350, carGroup.position.z + 1500);
     sunGroup.lookAt(carGroup.position.x, 350, carGroup.position.z);
-    
+
     const curX = Math.round(carGroup.position.x / chunkSize), curZ = Math.round(carGroup.position.z / chunkSize);
-    for(let x=curX-1; x<=curX+1; x++) for(let z=curZ-1; z<=curZ+1; z++) {
-        const key = `${x},${z}`; if(!chunks.has(key)) chunks.set(key, createChunk(x, z));
+    for (let x = curX - 1; x <= curX + 1; x++) for (let z = curZ - 1; z <= curZ + 1; z++) {
+        const key = `${x},${z}`; if (!chunks.has(key)) chunks.set(key, createChunk(x, z));
     }
+
+    // --- FIX 1: Collect keys first, then delete to avoid mutation during iteration ---
+    const toRemove = [];
     chunks.forEach((v, k) => {
         const [cx, cz] = k.split(',').map(Number);
-        if(Math.abs(cx-curX)>2 || Math.abs(cz-curZ)>2) { scene.remove(v); chunks.delete(k); }
+        if (Math.abs(cx - curX) > 2 || Math.abs(cz - curZ) > 2) toRemove.push(k);
     });
+    toRemove.forEach(k => { scene.remove(chunks.get(k)); chunks.delete(k); });
 
+    // --- FIX 2: Dispose geometry & material on particle removal ---
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i]; p.userData.life -= 0.04;
-        if(p.userData.nitro) p.position.add(new THREE.Vector3(0,0,-0.5).applyQuaternion(carGroup.quaternion));
+        if (p.userData.nitro) p.position.add(new THREE.Vector3(0, 0, -0.5).applyQuaternion(carGroup.quaternion));
         p.position.y += p.userData.vy; p.scale.multiplyScalar(1.05);
-        if (p.userData.life <= 0) { scene.remove(p); particles.splice(i, 1); }
+        if (p.userData.life <= 0) {
+            scene.remove(p);
+            p.geometry.dispose();
+            // material is shared (dustMatNormal/dustMatNitro), do NOT dispose it here
+            particles.splice(i, 1);
+        }
     }
     for (let i = trails.length - 1; i >= 0; i--) {
         const t = trails[i]; t.userData.life -= 0.01;
         t.material.opacity = t.userData.life * 0.4;
-        if (t.userData.life <= 0) { scene.remove(t); trails.splice(i, 1); }
+        if (t.userData.life <= 0) {
+            scene.remove(t);
+            t.material.dispose();
+            trails.splice(i, 1);
+        }
     }
 
     renderer.render(scene, camera);
