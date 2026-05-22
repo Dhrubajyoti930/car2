@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VECTOR RUN - SKID EDITION</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+
+    <div id="ui">
+        <div style="font-size: 18px; letter-spacing: 2px;">DRIFT_SYSTEM: V8.4 // GYRO: <span id="gyro-status">OFF</span></div>
+        <div id="speed">000</div>
+        <div style="font-size: 14px; background: #000; display: inline-block; padding: 2px 8px; margin-top: 5px;">VELOCITY_KMH</div>
+    </div>
+
+    <div id="btn-layout">CUSTOMIZE</div>
+
+    <div id="controls">
+        <div id="steer-container" class="draggable" data-id="steer">
+            <input type="range" id="steer-slider" min="-1" max="1" step="0.01" value="0">
+            <div class="label">Steer</div>
+        </div>
+
+        <div id="mid-controls" class="draggable" style="display:flex; gap: 8px;" data-id="buttons">
+            <div id="btn-pov" class="btn">CAM<br>POV</div>
+            <div id="btn-gyro" class="btn">GYRO<br>OFF</div>
+            <div id="btn-nitro" class="btn">NITRO<br>BOOST</div>
+            <div id="btn-brake" class="btn">E-BRAKE</div>
+        </div>
+
+        <div id="throttle-container" class="draggable" data-id="gas">
+            <input type="range" id="gas-slider" min="-1" max="1" step="0.01" value="0">
+            <div class="label" style="margin-top: 60px;">Gas</div>
+        </div>
+    </div>
+
+    <script type="module" src="script.js"></script>
+
+</body>
+</html>

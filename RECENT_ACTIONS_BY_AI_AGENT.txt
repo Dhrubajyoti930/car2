@@ -1,0 +1,22 @@
+--- SESSION: 2026-05-22 ---
+
+ACTION: Separated inline CSS and JS from index.html into dedicated files.
+
+CHANGES MADE:
+1. styles.css  — Extracted all content from the <style> block in <head>. Contains layout rules for #ui, #controls, #btn-layout, the draggable customisation mode, slider styling, button states (.btn, .btn-active, #btn-nitro), and base body/reset rules.
+
+2. script.js   — Extracted all content from the <script type="module"> block. Contains the full game logic: Three.js scene setup, car and ghost model creation, procedural city chunk generation, skid mark and dust particle systems, drift physics, audio engine (Web Audio API), gyroscope steering, keyboard and touch input handling, first-person/third-person camera, UI controls (nitro, brake, POV, gyro, customize/drag layout), and the main animation loop.
+
+3. index.html  — Cleaned up to contain only HTML structure. Now links externally to styles.css via <link rel="stylesheet"> and to script.js via <script type="module" src="script.js">. The importmap for Three.js is retained in the HTML as it must precede the module script tag.
+
+FILES UNCHANGED IN INTENT:
+- INTENTION.txt  — Read for context; no changes made.
+- All game behaviour is identical; this was a structural refactor only.
+
+--- SESSION: 2026-05-22 (FOLLOW-UP) ---
+
+ACTION: Fixed index.html to correctly load external script.js.
+
+PROBLEM: The importmap was placed in <body> after the HTML, and the <script type="module" src="script.js"> tag was also in <body>. Some browsers require the importmap to be declared in <head> before any module scripts are encountered, otherwise the bare specifier "three" cannot be resolved when the external script.js is fetched.
+
+FIX: Moved the <script type="importmap"> block from <body> into <head>. The <script type="module" src="script.js"> stays at the end of <body> (modules are deferred by spec, so DOM is available). No changes to script.js or styles.css.
